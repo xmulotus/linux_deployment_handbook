@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenSUSE Environment Initialization</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            background-color: #f4f4f4;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            padding-left: 40px; /* Left padding increased */
+            padding-right: 40px; /* Right padding increased */
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            text-align: center;
+            padding-top: 20px;
+        }
+        pre {
+            background-color: #dcdcdc; /* Darker gray background for code blocks */
+            color: #333;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 1em;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+        }
+        h2 {
+            margin-top: 20px;
+        }
+        h3 {
+            margin-top: 15px;
+        }
+        p {
+            margin: 10px 0;
+            font-size: 1.1em;
+        }
+        ul {
+            margin: 15px 0;
+        }
+        li {
+            margin: 5px 0;
+        }
+        code {
+            background-color: #e8e8e8;
+            padding: 3px 5px;
+            font-family: monospace;
+            font-size: 1em;
+        }
+    </style>
+</head>
+<body>
+    <h1>OpenSUSE Environment Initialization</h1>
+    <h2>Task Objective</h2>
+    <p>OpenSUSE 15.6 Server, make some simple modifications to adapt to the domestic network environment. Reduce default startup wait time, modify the hostname, change the file descriptor limit to suit server usage, and perform common tasks. After completion, save the environment as a template image for future use.</p>
+
+    <h2>1. Modify Zypper Repositories</h2>
+    <pre>
+sudo zypper rr repo-oss repo-non-oss repo-update repo-update-non-oss
+
+sudo zypper ar -fcg https://mirrors.aliyun.com/opensuse/distribution/leap/15.6/repo/oss/ repo-oss
+sudo zypper ar -fcg https://mirrors.aliyun.com/opensuse/distribution/leap/15.6/repo/non-oss/ repo-non-oss
+sudo zypper ar -fcg https://mirrors.aliyun.com/opensuse/update/leap/15.6/oss/ repo-update
+sudo zypper ar -fcg https://mirrors.aliyun.com/opensuse/update/leap/15.6/non-oss/ repo-update-non-oss
+    </pre>
+
+    <h2>2. Modify PyPi Repository</h2>
+    <pre>
+pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+pip config set install.trusted-host mirrors.aliyun.com
+    </pre>
+
+    <h2>3. Modify Default Boot Menu Wait Time</h2>
+    <pre>
+sudo vi /etc/default/grub
+# Change the number 8 to the desired wait time in seconds, for example, 2
+GRUB_TIMEOUT=2
+# Save the file
+
+# Then run the following command to apply changes
+sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+    </pre>
+
+    <h2>4. Modify Hostname</h2>
+    <pre>
+sudo vi /etc/hostname
+# Ensure the file contains only the desired hostname, e.g.:
+ceph1
+
+sudo vi /etc/hosts
+# In /etc/hosts, add or modify the line for 127.0.0.1 to associate the new hostname, e.g.:
+127.0.0.1   localhost
+127.0.1.1   ceph1
+
+# Restart the system or run the following command to apply:
+sudo systemctl restart systemd-hostnamed
+    </pre>
+
+    <h2>5. Create a Startup Service</h2>
+    <h3>5.1) Create a Disable Script</h3>
+    <pre>
+sudo vi /usr/local/bin/disable_transient.sh
+
+#!/bin/bash
+hostnamectl set-hostname none --transient
+# Save the file, then set execution permission:
+sudo chmod +x /usr/local/bin/disable_transient.sh
+    </pre>
+
+    <h3>5.2) Create a Systemd Auto-start Service</h3>
+    <pre>
+sudo vi /etc/systemd/system/transient.service
+
+[Unit]
+Description=Disable transient Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/disable_transient.sh # Link the script
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+    </pre>
+
+    <h3>5.3) Enable and Start the Systemd Service</h3>
+    <pre>
+sudo systemctl enable transient.service
+sudo systemctl start transient.service
+    </pre>
+
+    <h2>6. Set Maximum Open File Handles</h2>
+    <pre>
+sudo vi /etc/security/limits.conf
+
+# Add the following at the end of the file:
+* soft nofile 65536
+hard nofile  65536
+    </pre>
+
+    <h2>7. Configure Static IP Address Instead of DHCP</h2>
+    <h3>7.1) Use Wicked to Configure Static IP</h3>
+    <pre>
+sudo vi /etc/sysconfig/network/ifcfg-eth0
+
+BOOTPROTO='static'
+STARTMODE='auto'
+IPADDR='192.168.31.3/24'
+GATEWAY='192.168.31.1'
+ZONE=public
+    </pre>
+
+    <h3>7.2) Add Routing File</h3>
+    <pre>
+sudo vi /etc/sysconfig/network/ifroute-eth0
+
+default 192.168.31.1 - -
+    </pre>
+
+    <h3>7.3) Configure DNS Resolution (do not modify other settings)</h3>
+    <pre>
+NETCONFIG_DNS_STATIC_SERVERS="223.5.5.5 119.29.29.29"
+    </pre>
+
+    <p>After modification, update the configuration:</p>
+    <pre>
+sudo netconfig update -f
+    </pre>
+</body>
+</html>

@@ -1,0 +1,427 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Install a Ceph Cluster</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            background-color: #f4f4f4;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            padding-left: 40px; /* Left padding increased */
+            padding-right: 40px; /* Right padding increased */
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            text-align: center;
+            padding-top: 20px;
+        }
+        pre {
+            background-color: #dcdcdc; /* Darker gray background for code blocks */
+            color: #333;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 1em;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-x: auto;
+        }
+        h2 {
+            margin-top: 20px;
+        }
+        h3 {
+            margin-top: 15px;
+        }
+        p {
+            margin: 10px 0;
+            font-size: 1.1em;
+        }
+        ul {
+            margin: 15px 0;
+        }
+        li {
+            margin: 5px 0;
+        }
+        code {
+            background-color: #e8e8e8;
+            padding: 3px 5px;
+            font-family: monospace;
+            font-size: 1em;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>How to Install a Ceph Cluster</h1>
+
+    <h2>1. Prepare the Environment</h2>
+    <pre>
+        sudo zypper install -y python3 podman curl wget
+    </pre>
+
+    <h2>2. Install Ceph Related Components</h2>
+    <pre>
+        sudo zypper install ceph
+    </pre>
+
+    <h2>3. Configure Hostname Resolution</h2>
+    <p>Ensure that the /etc/hosts file on all Ceph nodes contains the IP and hostname of all nodes:</p>
+    <pre>
+        192.168.31.2 node1
+        192.168.31.3 node2
+        192.168.31.4 node3
+    </pre>
+
+    <h2>4. Install cephadm on Each Node for High Availability (Three Replicas)</h2>
+    <pre>
+        curl --silent --remote-name --location https://github.com/ceph/ceph/raw/quincy/src/cephadm/cephadm
+        chmod +x cephadm
+        sudo mv cephadm /usr/local/bin/
+    </pre>
+    <p><strong>Note:</strong> If the curl command fails, you may need to use a proxy or another method to download the file.</p>
+
+    <h3>Verify the Installation of cephadm (It will automatically download the podman image during verification)</h3>
+    <pre>
+        cephadm version
+    </pre>
+
+    <h2>5. Ensure Time Synchronization on Each Node:</h2>
+    <p>Use chrony or ntpd to synchronize the time between cluster nodes:</p>
+    <pre>
+        sudo systemctl enable chronyd
+        sudo systemctl start chronyd
+    </pre>
+
+    <h2>6. Set Up the Firewall:</h2>
+    <p>Open the necessary ports for Ceph, such as 6789 (Monitors), 6800-7300 (OSDs), etc.</p>
+    <pre>
+        sudo firewall-cmd --zone=public --add-port=6789/tcp --permanent
+        sudo firewall-cmd --zone=public --add-port=6800-7300/tcp --permanent
+        sudo firewall-cmd --reload
+    </pre>
+
+    <h2>7. Bootstrap the Ceph Cluster</h2>
+    <p>Run the following command on node1 (Cephadmin node):</p>
+    <pre>
+        sudo cephadm bootstrap --mon-ip 192.168.31.2
+    </pre>
+    <p>Here we assume that the admin node and the mon node are the same. The <mon-ip> refers to the IP address of the Ceph Monitor node.</p>
+    <p>The command will perform the following tasks:</p>
+    <ul>
+        <li>Install Ceph Monitor (Mon)</li>
+        <li>Initialize the Ceph cluster</li>
+        <li>Start the Ceph management tools</li>
+        <li>Create the Ceph cluster configuration file at the default location</li>
+    </ul>
+    <p>After successful execution, the following output will appear:</p>
+    <pre>
+        Ceph Dashboard is now available at:
+
+             URL: https://node1:8443/
+            User: admin
+        Password:XXXXXXXXX
+
+        Enabling client.admin keyring and conf on hosts with "admin" label
+        Enabling autotune for osd_memory_target
+        You can access the Ceph CLI as following in case of multi-cluster or non-default config:
+
+                sudo /usr/sbin/cephadm shell --fsid dee82c48-12f6-11f0-a901-005056308877 -c /etc/ceph/ceph.conf -k /etc/ceph/ceph.client.admin.keyring
+
+        Or, if you are only running a single cluster on this host:
+
+                sudo /usr/sbin/cephadm shell 
+
+        Please consider enabling telemetry to help improve Ceph:
+
+                ceph telemetry on
+
+        For more information see:
+
+                https://docs.ceph.com/en/pacific/mgr/telemetry/
+
+        Bootstrap complete.
+    </pre>
+
+    <h2>8. Add Additional Nodes</h2>
+    <p>On the ceph-admin node, use cephadm to add node1, node2, and node3:</p>
+    <h3>Add node1</h3>
+    <pre>
+        sudo /usr/local/bin/cephadm shell -- ceph orch host add node1 192.168.31.2
+    </pre>
+
+    <h3>Create admin keyring on node1</h3>
+    <pre>
+        sudo ceph orch client-keyring set client.admin '*' 
+        sudo ceph cephadm get-pub-key > ~/ceph.pub
+
+        sudo ceph cephadm get-ssh-config > ssh_config
+        sudo ceph config-key get mgr/cephadm/ssh_identity_key > ~/cephadm_private_key
+
+        sudo chmod 0600 ~/cephadm_private_key
+    </pre>
+
+    <h3>Add node2</h3>
+    <pre>
+        ssh-copy-id -f -i ~/ceph.pub jsun@192.168.31.3
+        ssh -F ssh_config -i ~/cephadm_private_key root@192.168.31.3
+        sudo ceph orch host add node2 192.168.31.3
+    </pre>
+
+    <h3>Add node3</h3>
+    <pre>
+        ssh-copy-id -f -i ~/ceph.pub 192.168.31.4
+        ssh -F ssh_config -i ~/cephadm_private_key root@192.168.31.4
+        sudo ceph orch host add ceph3 192.168.31.4
+    </pre>
+
+    <h2>9. Add OSD Storage</h2>
+    <h3>Generate export key</h3>
+    <pre>
+        sudo ceph auth get client.bootstrap-osd -o /var/lib/ceph/bootstrap-osd/ceph.keyring
+    </pre>
+    <h3>Add specified devices</h3>
+    <pre>
+        sudo ceph-volume lvm create --data /dev/sdb
+        sudo cephadm shell -- ceph orch daemon add osd node2:/dev/sdb
+        sudo cephadm shell -- ceph orch daemon add osd node3:/dev/sdb
+    </pre>
+
+    <h2>10. Deploy MGR, MON, MDS</h2>
+    <p>Check the current services:</p>
+    <pre>
+        ceph orch ps
+    </pre>
+    <p>Ensure that MON, MGR, and MDS services are running:</p>
+    <pre>
+        sudo ceph orch apply mon
+        sudo ceph orch apply mgr
+        sudo ceph orch apply mds
+    </pre>
+
+    <h2>11. Verify Cluster Status</h2>
+    <pre>
+        ceph -s
+    </pre>
+
+    <h2>12. Create CephFS</h2>
+    <pre>
+        sudo ceph osd pool create mycephfs_metadata 8
+        sudo ceph osd pool create mycephfs_data 32
+        sudo ceph fs new mycephfs mycephfs_metadata mycephfs_data
+        sudo ceph auth get-or-create client.cephfsuser mon 'allow r' mds 'allow rw' osd 'allow rw pool=mycephfs_data'
+    </pre>
+
+    <h3>Output:</h3>
+    <pre>
+        [client.cephfsuser]
+        key = AQCWnfJnXl2nChAADCWj7tVilqy3zEq8ZeDjfw==
+</pre>
+
+<h3>Get the key for client.cephfsuser:</h3>
+<pre>
+    sudo ceph auth get-key client.cephfsuser > /etc/ceph/ceph.client.cephfsuser.keyring
+</pre>
+
+<h3>Create and start MDS Server:</h3>
+<pre>
+    sudo ceph orch apply mds cephfs --placement="1 node1"
+</pre>
+
+<h3>Mount the filesystem:</h3>
+<pre>
+    sudo mkdir /mnt/cephfs
+</pre>
+
+<h3>Register the mount as a systemd service:</h3>
+<pre>
+    sudo vi /etc/systemd/system/mnt-cephfs.mount
+</pre>
+<pre>
+[Unit]
+Description=Mount CephFS at boot
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=node1:6789,node2:6789,node3:6789:/ 
+Where=/mnt/cephfs
+Type=ceph
+Options=name=cephfsuser,secretfile=/etc/ceph/ceph.client.cephfsuser.keyring,_netdev
+
+[Install]
+WantedBy=multi-user.target
+</pre>
+<pre>
+    systemctl enable --now mnt-cephfs.mount
+</pre>
+
+<h3>If mounting temporarily:</h3>
+<pre>
+    sudo mount -t ceph node1:6789,node2:6789,node3:6789:/ /mnt/cephfs -o name=cephfsuser,secretfile=/etc/ceph/ceph.client.cephfsuser.keyring
+</pre>
+
+<h3>Check health status:</h3>
+<pre>
+    sudo ceph health detail
+</pre>
+
+<h3>Set noout to prevent data migration:</h3>
+<pre>
+    ceph osd set noout
+</pre>
+
+<h3>Unset noout flag:</h3>
+<pre>
+    ceph osd unset noout
+</pre>
+
+<h2>14. How to Install RGW Gateway</h2>
+
+<h3>14.1) Add new OSDs to the cluster:</h3>
+<pre>
+    sudo cephadm shell -- ceph orch daemon add osd node1:/dev/sdc
+    sudo cephadm shell -- ceph orch daemon add osd node2:/dev/sdc
+    sudo cephadm shell -- ceph orch daemon add osd node3:/dev/sdc
+</pre>
+
+<h3>14.2) Create dedicated storage pools:</h3>
+<pre>
+    sudo cephadm shell -- ceph osd pool create rgw.buckets.data 128 128
+    sudo cephadm shell -- ceph osd pool create rgw.buckets.index 32 32
+    sudo cephadm shell -- ceph osd pool create rgw.meta 32 32
+    sudo cephadm shell -- ceph osd pool create rgw.log 32 32
+</pre>
+
+<h3>Enable application for the pools:</h3>
+<pre>
+    sudo cephadm shell -- ceph osd pool application enable rgw.buckets.data rgw
+    sudo cephadm shell -- ceph osd pool application enable rgw.buckets.index rgw
+    sudo cephadm shell -- ceph osd pool application enable rgw.meta rgw
+    sudo cephadm shell -- ceph osd pool application enable rgw.log rgw
+</pre>
+
+<h3>14.3) Create RGW service specification file:</h3>
+<pre>
+    vi /etc/ceph/rgw-spec.yaml
+</pre>
+<pre>
+service_type: rgw
+service_id: rgw
+placement:
+  hosts:
+    - node1
+    - node2
+    - node3
+spec:
+  rgw_frontend_port: 8080
+</pre>
+
+<h3>14.4) Deploy the RGW service:</h3>
+<pre>
+    sudo ceph orch apply -i /etc/ceph/rgw-spec.yaml
+</pre>
+
+<h3>Check the deployment progress:</h3>
+<pre>
+    sudo cephadm shell -- ceph orch ps | grep rgw
+</pre>
+
+<h3>14.5) Create RGW user and verify:</h3>
+<pre>
+    sudo cephadm shell -- radosgw-admin user create --uid=rgwuser --display-name="RGW User" --system
+    sudo cephadm shell -- radosgw-admin user info --uid=rgwuser
+</pre>
+
+<h3>Check RGW service status:</h3>
+<pre>
+    sudo cephadm shell -- ceph orch ls | grep rgw
+    sudo cephadm shell -- ceph -s
+</pre>
+
+<h3>Test the RGW endpoint:</h3>
+<pre>
+    curl http://node1:8080
+</pre>
+
+<h3>14.6) Configure users and buckets (optional):</h3>
+<pre>
+    sudo radosgw-admin user create --uid="myuser" --display-name="My User" --email="myuser@example.com"
+</pre>
+
+<p>To view user details:</p>
+<pre>
+    radosgw-admin user stats --uid="myuser"
+</pre>
+
+<h3>14.7) Install RGW client tools:</h3>
+<pre>
+    sudo zypper install aws-cli
+    pip3 install --user awscli
+</pre>
+
+<h3>Retrieve access_key and secret_key:</h3>
+<pre>
+    sudo cephadm shell -- radosgw-admin user info --uid=rgwuser
+</pre>
+<p>Result:</p>
+<pre>
+    "access_key": "PG1CGTO3W7W66PZ1GAHT",
+    "secret_key": "xNe0M76n1hcTCqmKs0y3CsCqaucw0KSh9BmCs07b"
+</pre>
+
+<h3>Configure AWS CLI with the retrieved keys:</h3>
+<pre>
+    aws configure
+</pre>
+<p>Enter the provided access key and secret key.</p>
+<p>The configuration file is located in the hidden ~/.aws directory. You can view hidden files using:</p>
+<pre>
+    ls -la ~
+</pre>
+
+<h3>Create an object bucket:</h3>
+<pre>
+    aws s3 mb s3://testbucket --endpoint-url http://node1:8080
+</pre>
+
+<h3>Upload a test file (500MB):</h3>
+<pre>
+    aws s3 cp VMware-Fusion-13.6.2-24409261_universal.dmg s3://testbucket/ --endpoint-url http://node1:8080
+</pre>
+
+<h3>Download the test file:</h3>
+<pre>
+    aws s3 cp s3://testbucket/VMware-Fusion-13.6.2-24409261_universal.dmg vmware.dmg --endpoint-url http://node1:8080
+</pre>
+
+<h2>15. How to Properly Shut Down and Start the Cluster</h2>
+
+<h3>15.1) Proper Shutdown:</h3>
+<p>On node1, in the home directory, run the following script:</p>
+<pre>
+    stop_ceph.sh
+</pre>
+<p>Then shut down node2 and node3.</p>
+
+<h3>15.2) Proper Startup:</h3>
+<p>Start node1, node2, and node3 simultaneously. After startup, on node1:</p>
+<pre>
+    sudo ceph osd unset noout
+</pre>
+<p>Then, on each node, mount the filesystem:</p>
+<pre>
+    sudo mount -t ceph node1:6789,node2:6789,node3:6789:/ /mnt/cephfs -o name=cephfsuser,secretfile=/etc/ceph/ceph.client.cephfsuser.keyring
+</pre>
+
+<h3>15.3) Shutdown and Startup Script (located on node1):</h3>
+<pre>
+    ～/stop_ceph.sh
+</pre>
+
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KVM Installation Notes</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        h2 {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 4px 8px;
+            border-radius: 5px;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .note {
+            background-color: #f0f8ff;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-left: 5px solid #00bfff;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>KVM Installation Notes</h1>
+
+    <h2>Objective:</h2>
+    <p>Use OpenSUSE to create a host machine with a static IP of 192.168.31.11, and create a virtual machine (VM) with Ubuntu, using a bridged network mode with an IP address of 192.168.31.12. During the installation, you should be able to monitor the progress and status of the VM installation using a VNC client.</p>
+
+    <h2>Test Environment:</h2>
+    <p>Windows (16C, 16G) running VMWare hosting OpenSUSE 15.6 Server (CPU: 8C, Mem: 8G, HD: 60G, IP: 192.168.31.11).</p>
+    <p>VM on VM configuration: (CPU: 4C, Memory: 4G, HD: 25G, IP: 192.168.31.12), OS is Ubuntu 22.04 Server.</p>
+
+    <h2>1. Install KVM and related tools</h2>
+    <pre><code>sudo zypper in patterns-server-kvm_server patterns-server-kvm_tools
+sudo zypper in libvirt
+sudo zypper install bridge-utils  # Bridging utility package</code></pre>
+
+    <p>This will install the following key components:</p>
+    <ul>
+        <li><strong>qemu-kvm</strong>: KVM virtualization platform</li>
+        <li><strong>libvirt</strong>: Virtualization management library</li>
+        <li><strong>virt-manager</strong>: Graphical virtual machine management tool</li>
+        <li><strong>virt-install</strong>: Command-line tool for VM creation</li>
+        <li><strong>bridge-utils</strong>: Network bridging tools</li>
+    </ul>
+
+    <h2>2. Configure the libvirt service</h2>
+    <pre><code>sudo systemctl start libvirtd
+sudo systemctl enable libvirtd</code></pre>
+    
+    <p>Add the current user to the libvirt group to gain management permissions:</p>
+    <pre><code>sudo usermod -aG libvirt $(whoami)</code></pre>
+    
+    <p>Re-login to apply group membership, or run:</p>
+    <pre><code>newgrp libvirt</code></pre>
+
+    <h2>3. Host supports bridging mode</h2>
+
+    <p>This configuration sets the physical NIC (eth0) as a member of the bridge (br0), without assigning an IP address to the physical NIC.</p>
+    <pre><code>sudo vi /etc/sysconfig/network/ifcfg-eth0</code></pre>
+    <pre><code>BOOTPROTO='none'
+STARTMODE='auto'
+BRIDGE='br0'</code></pre>
+
+    <p>Create a new bridge configuration file:</p>
+    <pre><code>sudo vi /etc/sysconfig/network/ifcfg-br0</code></pre>
+    <pre><code>BOOTPROTO='static'
+STARTMODE='auto'
+BRIDGE='yes'
+BRIDGE_FORWARDDELAY='0'
+BRIDGE_STP='off'
+IPADDR='192.168.31.11/24'
+GATEWAY='192.168.31.1'
+HOSTNAME='KVM'
+MTU=''
+NAME='br0'
+BRIDGE_PORTS='eth0'
+DHCLIENT_SET_HOSTNAME='no'
+DNS1='223.5.5.5'
+DNS2='119.29.29.29'</code></pre>
+
+    <p>Add a routing rule:</p>
+    <pre><code>echo "default 192.168.31.1 - -" | sudo tee /etc/sysconfig/network/routes</code></pre>
+
+    <p>Restart to apply changes:</p>
+    <pre><code>sudo systemctl restart wicked</code></pre>
+
+    <p>Check if eth0 and br0 are both up:</p>
+    <pre><code>ip addr</code></pre>
+
+    <h2>5. Create an auto-start service for the bridge</h2>
+    <pre><code>sudo vi /etc/systemd/system/bridge.service</code></pre>
+    <pre><code>[Unit]
+Description=Startup Network Bridge Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bridge.sh # Script association
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+    <pre><code>sudo vi /usr/local/bin/bridge.sh</code></pre>
+    <pre><code>#!/bin/bash
+# Delete the existing bridge
+ip link set br0 down
+brctl delbr br0
+
+# Create a new bridge
+brctl addbr br0
+brctl addif br0 eth0  # Replace eth0 with the actual NIC name</code></pre>
+
+    <h2>6. Configure libvirt for bridged networking</h2>
+    <pre><code>cat > bridge-network.xml <<EOF
+<network>
+  <name>host-bridge</name>
+  <forward mode="bridge"/>
+  <bridge name="br0"/>
+</network>
+EOF
+
+sudo virsh net-define bridge-network.xml
+sudo virsh net-start host-bridge
+sudo virsh net-autostart host-bridge</code></pre>
+
+    <h2>7. Create a virtual machine via command line</h2>
+    <pre><code>sudo virt-install \
+  --name ubuntu-vm2 \
+  --memory 4096 \
+  --vcpus 4 \
+  --disk size=25 \
+  --cdrom /home/jsun/ubuntu-24.04.2-live-server-amd64.iso \
+  --os-variant ubuntu22.04 \
+  --network bridge=br0,mac=52:54:00:12:34:55 \
+  --graphics vnc,listen=0.0.0.0,port=5901,password=mypass</code></pre>
+
+    <h2>8. Check if port 5901 is listening</h2>
+    <pre><code>sudo ss -tulpn | grep 5901</code></pre>
+    <p>The output should look like:</p>
+    <pre><code>[sudo] password for root: 
+tcp   LISTEN 0      1            0.0.0.0:5901      0.0.0.0:*    users:((“qemu-system-x86",pid=17148,fd=15))</code></pre>
+
+    <h2>9. Observe the installation progress on MacOS</h2>
+    <p>In Finder, select Go → Connect to Server, enter: <code>vnc:192.168.31.11:5901</code>, and enter the password: <code>mypass</code>, you should see the Ubuntu installation progress. The experiment was successful!</p>
+
+    <div class="note">
+        <strong>Note:</strong> Because you are running the VM within a VM, the CPU in the virtual machine lacks hardware virtualization support, causing installation to be slow. This is not recommended in a production environment.
+    </div>
+
+    <h2>10. Virtual machine management commands</h2>
+    <p>Commonly used commands to manage virtual machines with virsh:</p>
+    <ul>
+        <li><code>virsh list --all</code> - List all virtual machines</li>
+        <li><code>virsh start vm-name</code> - Start a virtual machine</li>
+        <li><code>virsh shutdown vm-name</code> - Shutdown a virtual machine</li>
+        <li><code>virsh destroy vm-name</code> - Force shutdown (equivalent to poweroff)</li>
+        <li><code>virsh console vm-name</code> - Connect to the virtual machine console</li>
+        <li><code>virsh autostart vm-name</code> - Enable auto-start for a virtual machine</li>
+        <li><code>virsh autostart --disable vm-name</code> - Disable auto-start for a virtual machine</li>
+    </ul>
+
+    <h2>11. Enable Virtual Machine to Start Automatically</h2>
+    <p>If you want your virtual machine to start automatically on boot, you can configure it with the following command:</p>
+    <pre><code>sudo virsh autostart ubuntu-vm2</code></pre>
+
+    <p>This will ensure that the VM is automatically started each time the system reboots.</p>
+
+    <h2>12. Checking the Status of the Virtual Machine</h2>
+    <p>To check the status of your virtual machine, use:</p>
+    <pre><code>sudo virsh list --all</code></pre>
+    <p>This will show the state of all VMs (running, paused, shut down, etc.).</p>
+
+    <h2>13. Modify Virtual Machine Configuration</h2>
+    <p>If you need to modify the configuration of a running VM, you can do so by editing the XML configuration:</p>
+    <pre><code>sudo virsh edit ubuntu-vm2</code></pre>
+    <p>This command opens the VM’s configuration in an editor where you can make changes such as adjusting CPU, memory, and disk allocations.</p>
+
+    <h2>14. Shutting Down the Host</h2>
+    <p>To shut down the entire KVM host safely, ensure all virtual machines are shut down first:</p>
+    <pre><code>sudo virsh list --all  # List all VMs and their status
+sudo virsh shutdown ubuntu-vm2  # Shutdown the VM
+sudo shutdown -h now  # Shutdown the host system</code></pre>
+
+    <h2>15. Additional Resources</h2>
+    <ul>
+        <li><a href="https://libvirt.org/" target="_blank">Libvirt Official Documentation</a></li>
+        <li><a href="https://www.qemu.org/" target="_blank">QEMU Official Documentation</a></li>
+        <li><a href="https://www.openstack.org/" target="_blank">OpenStack for KVM-based Clouds</a></li>
+    </ul>
+
+    <p>With these steps, you should now be able to successfully set up and manage virtual machines on your OpenSUSE system using KVM!</p>
+
+</body>
+</html>
